@@ -39,3 +39,11 @@ CREATE TABLE audit_logs (
     reviewer VARCHAR(100),
     action_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE ai_audit_reports (
+    report_id SERIAL PRIMARY KEY,
+    transaction_id UUID,
+    anomaly_type VARCHAR(100),
+    generated_report TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

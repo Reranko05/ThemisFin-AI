@@ -1,5 +1,6 @@
 import pandas as pd
 from scipy import stats
+from sqlalchemy import text
 
 from app.database.db import get_engine
 
@@ -109,6 +110,36 @@ def combine_anomalies(df):
     return all_anomalies
 
 
+def persist_anomalies(anomalies_df):
+
+    with engine.connect() as conn:
+
+        conn.execute(
+            text("""
+                DELETE FROM anomaly_flags;
+            """)
+        )
+
+        conn.commit()
+
+    anomalies_df["confidence_score"] = 0.95
+
+    anomalies_df["review_status"] = "Open"
+
+    anomalies_df.to_sql(
+        "anomaly_flags",
+        engine,
+        if_exists="append",
+        index=False,
+        chunksize=5000,
+        method="multi"
+    )
+
+    print(
+        "Anomalies persisted to database."
+    )
+
+
 if __name__ == "__main__":
 
     transactions_df = fetch_transactions()
@@ -118,6 +149,8 @@ if __name__ == "__main__":
     )
 
     print(anomalies_df.head())
+
+    persist_anomalies(anomalies_df)
 
     anomalies_df.to_csv(
         "data/anomalies.csv",

@@ -7,7 +7,6 @@ sys.path.append(str(project_root))
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-from sqlalchemy import create_engine
 
 from app.database.db import get_engine
 
@@ -31,6 +30,11 @@ transactions_df = pd.read_sql(
     engine
 )
 
+anomalies_df = pd.read_sql(
+    "SELECT * FROM anomaly_flags",
+    engine
+)
+
 # =====================================================
 # KPIs
 # =====================================================
@@ -39,12 +43,12 @@ total_transactions = len(
     transactions_df
 )
 
-total_volume = (
-    transactions_df["amount"].sum()
+total_anomalies = len(
+    anomalies_df
 )
 
-avg_transaction = (
-    transactions_df["amount"].mean()
+avg_risk_score = (
+    anomalies_df["severity_score"].mean()
 )
 
 col1, col2, col3 = st.columns(3)
@@ -55,35 +59,35 @@ col1.metric(
 )
 
 col2.metric(
-    "Total Transaction Volume",
-    f"${total_volume:,.2f}"
+    "Detected Anomalies",
+    f"{total_anomalies:,}"
 )
 
 col3.metric(
-    "Average Transaction",
-    f"${avg_transaction:,.2f}"
+    "Average Severity Score",
+    f"{avg_risk_score:.2f}"
 )
 
 # =====================================================
-# TRANSACTION CATEGORY DISTRIBUTION
+# ANOMALY DISTRIBUTION
 # =====================================================
 
-category_counts = (
-    transactions_df["category"]
+anomaly_counts = (
+    anomalies_df["anomaly_type"]
     .value_counts()
     .reset_index()
 )
 
-category_counts.columns = [
-    "category",
+anomaly_counts.columns = [
+    "anomaly_type",
     "count"
 ]
 
 fig1 = px.pie(
-    category_counts,
-    names="category",
+    anomaly_counts,
+    names="anomaly_type",
     values="count",
-    title="Transaction Categories"
+    title="Anomaly Distribution"
 )
 
 st.plotly_chart(
@@ -92,25 +96,31 @@ st.plotly_chart(
 )
 
 # =====================================================
-# TOP ENTITIES
+# TOP RISK ENTITIES
 # =====================================================
 
-entity_volume = (
-    transactions_df.groupby(
-        "source_entity"
-    )["amount"]
-    .sum()
-    .reset_index()
+risk_query = """
+    SELECT
+        t.source_entity,
+        COUNT(*) AS anomaly_count
+    FROM anomaly_flags af
+    JOIN transactions t
+    ON af.transaction_id = t.transaction_id
+    GROUP BY t.source_entity
+    ORDER BY anomaly_count DESC
+    LIMIT 10;
+"""
+
+risk_df = pd.read_sql(
+    risk_query,
+    engine
 )
 
 fig2 = px.bar(
-    entity_volume.sort_values(
-        by="amount",
-        ascending=False
-    ).head(10),
+    risk_df,
     x="source_entity",
-    y="amount",
-    title="Top Entity Transaction Volume"
+    y="anomaly_count",
+    title="Top Risky Entities"
 )
 
 st.plotly_chart(
@@ -119,42 +129,73 @@ st.plotly_chart(
 )
 
 # =====================================================
-# DAILY TRANSACTION TREND
+# SEVERITY FILTER
 # =====================================================
 
-transactions_df["timestamp"] = (
-    pd.to_datetime(
-        transactions_df["timestamp"]
+st.sidebar.header(
+    "Investigation Filters"
+)
+
+selected_severity = (
+    st.sidebar.slider(
+        "Minimum Severity",
+        0,
+        100,
+        50
     )
 )
 
-daily_trend = (
-    transactions_df.groupby(
-        transactions_df["timestamp"].dt.date
-    )["amount"]
-    .sum()
-    .reset_index()
-)
-
-fig3 = px.line(
-    daily_trend,
-    x="timestamp",
-    y="amount",
-    title="Daily Transaction Trend"
-)
-
-st.plotly_chart(
-    fig3,
-    use_container_width=True
-)
+filtered_df = anomalies_df[
+    anomalies_df["severity_score"]
+    >= selected_severity
+]
 
 # =====================================================
-# RAW DATA VIEW
+# ANOMALY TABLE
 # =====================================================
 
-st.subheader("Transaction Investigation Console")
+st.subheader(
+    "Anomaly Investigation Console"
+)
 
 st.dataframe(
-    transactions_df.head(1000),
+    filtered_df,
     use_container_width=True
 )
+
+# =====================================================
+# AI REPORTS
+# =====================================================
+
+try:
+
+    ai_reports_df = pd.read_sql(
+        """
+        SELECT *
+        FROM ai_audit_reports
+        ORDER BY created_at DESC
+        LIMIT 10;
+        """,
+        engine
+    )
+
+    st.subheader(
+        "AI-Generated Audit Findings"
+    )
+
+    for _, row in ai_reports_df.iterrows():
+
+        with st.expander(
+            f"{row['anomaly_type']} — "
+            f"{row['transaction_id']}"
+        ):
+
+            st.write(
+                row["generated_report"]
+            )
+
+except Exception:
+
+    st.warning(
+        "AI reports not generated yet."
+    )
