@@ -47,3 +47,27 @@ CREATE TABLE ai_audit_reports (
     generated_report TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE anomaly_flags
+ADD COLUMN assigned_reviewer VARCHAR(100);
+
+ALTER TABLE anomaly_flags
+ADD COLUMN investigation_notes TEXT;
+
+ALTER TABLE anomaly_flags
+ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+CREATE MATERIALIZED VIEW entity_risk_summary AS
+
+SELECT
+    t.source_entity,
+    COUNT(af.anomaly_id) AS anomaly_count,
+    AVG(af.severity_score) AS avg_severity,
+    SUM(t.amount) AS total_volume
+
+FROM transactions t
+
+LEFT JOIN anomaly_flags af
+ON t.transaction_id = af.transaction_id
+
+GROUP BY t.source_entity;

@@ -8,7 +8,13 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from sqlalchemy import text
+
 from app.database.db import get_engine
+
+from app.analytics.workflow_manager import (
+    update_anomaly_status
+)
 
 engine = get_engine()
 
@@ -18,7 +24,7 @@ st.set_page_config(
 )
 
 st.title(
-    "ThemisFin AI — Audit & Compliance Dashboard"
+    "ThemisFin AI — Enterprise Audit Platform"
 )
 
 # =====================================================
@@ -47,7 +53,7 @@ total_anomalies = len(
     anomalies_df
 )
 
-avg_risk_score = (
+avg_severity = (
     anomalies_df["severity_score"].mean()
 )
 
@@ -64,76 +70,28 @@ col2.metric(
 )
 
 col3.metric(
-    "Average Severity Score",
-    f"{avg_risk_score:.2f}"
+    "Average Severity",
+    f"{avg_severity:.2f}"
 )
 
 # =====================================================
-# ANOMALY DISTRIBUTION
-# =====================================================
-
-anomaly_counts = (
-    anomalies_df["anomaly_type"]
-    .value_counts()
-    .reset_index()
-)
-
-anomaly_counts.columns = [
-    "anomaly_type",
-    "count"
-]
-
-fig1 = px.pie(
-    anomaly_counts,
-    names="anomaly_type",
-    values="count",
-    title="Anomaly Distribution"
-)
-
-st.plotly_chart(
-    fig1,
-    use_container_width=True
-)
-
-# =====================================================
-# TOP RISK ENTITIES
-# =====================================================
-
-risk_query = """
-    SELECT
-        t.source_entity,
-        COUNT(*) AS anomaly_count
-    FROM anomaly_flags af
-    JOIN transactions t
-    ON af.transaction_id = t.transaction_id
-    GROUP BY t.source_entity
-    ORDER BY anomaly_count DESC
-    LIMIT 10;
-"""
-
-risk_df = pd.read_sql(
-    risk_query,
-    engine
-)
-
-fig2 = px.bar(
-    risk_df,
-    x="source_entity",
-    y="anomaly_count",
-    title="Top Risky Entities"
-)
-
-st.plotly_chart(
-    fig2,
-    use_container_width=True
-)
-
-# =====================================================
-# SEVERITY FILTER
+# SIDEBAR FILTERS
 # =====================================================
 
 st.sidebar.header(
     "Investigation Filters"
+)
+
+selected_types = (
+    st.sidebar.multiselect(
+        "Anomaly Types",
+        anomalies_df["anomaly_type"]
+        .unique(),
+        default=list(
+            anomalies_df["anomaly_type"]
+            .unique()
+        )
+    )
 )
 
 selected_severity = (
@@ -146,16 +104,83 @@ selected_severity = (
 )
 
 filtered_df = anomalies_df[
-    anomalies_df["severity_score"]
-    >= selected_severity
+    (
+        anomalies_df["anomaly_type"]
+        .isin(selected_types)
+    )
+    &
+    (
+        anomalies_df["severity_score"]
+        >= selected_severity
+    )
 ]
 
 # =====================================================
-# ANOMALY TABLE
+# ANOMALY DISTRIBUTION
 # =====================================================
 
 st.subheader(
-    "Anomaly Investigation Console"
+    "Anomaly Distribution"
+)
+
+anomaly_counts = (
+    filtered_df["anomaly_type"]
+    .value_counts()
+    .reset_index()
+)
+
+anomaly_counts.columns = [
+    "anomaly_type",
+    "count"
+]
+
+fig1 = px.pie(
+    anomaly_counts,
+    names="anomaly_type",
+    values="count"
+)
+
+st.plotly_chart(
+    fig1,
+    use_container_width=True
+)
+
+# =====================================================
+# ENTITY RISK HEATMAP
+# =====================================================
+
+st.subheader(
+    "Entity Risk Summary"
+)
+
+entity_risk_df = pd.read_sql(
+    """
+    SELECT *
+    FROM entity_risk_summary
+    ORDER BY anomaly_count DESC
+    LIMIT 20;
+    """,
+    engine
+)
+
+fig2 = px.density_heatmap(
+    entity_risk_df,
+    x="source_entity",
+    y="avg_severity",
+    z="anomaly_count"
+)
+
+st.plotly_chart(
+    fig2,
+    use_container_width=True
+)
+
+# =====================================================
+# INVESTIGATION CONSOLE
+# =====================================================
+
+st.subheader(
+    "Investigation Console"
 )
 
 st.dataframe(
@@ -164,8 +189,62 @@ st.dataframe(
 )
 
 # =====================================================
-# AI REPORTS
+# WORKFLOW MANAGEMENT
 # =====================================================
+
+st.subheader(
+    "Workflow Management"
+)
+
+anomaly_ids = (
+    filtered_df["anomaly_id"]
+    .tolist()
+)
+
+selected_anomaly = st.selectbox(
+    "Select Anomaly ID",
+    anomaly_ids
+)
+
+reviewer = st.text_input(
+    "Reviewer Name"
+)
+
+new_status = st.selectbox(
+    "Update Status",
+    [
+        "Open",
+        "Under Review",
+        "Escalated",
+        "Resolved",
+        "False Positive"
+    ]
+)
+
+notes = st.text_area(
+    "Investigation Notes"
+)
+
+if st.button("Update Workflow"):
+
+    update_anomaly_status(
+        selected_anomaly,
+        new_status,
+        reviewer,
+        notes
+    )
+
+    st.success(
+        "Workflow updated successfully."
+    )
+
+# =====================================================
+# AI AUDIT REPORTS
+# =====================================================
+
+st.subheader(
+    "AI Audit Findings"
+)
 
 try:
 
@@ -179,15 +258,11 @@ try:
         engine
     )
 
-    st.subheader(
-        "AI-Generated Audit Findings"
-    )
-
     for _, row in ai_reports_df.iterrows():
 
         with st.expander(
-            f"{row['anomaly_type']} — "
-            f"{row['transaction_id']}"
+            f"{row['anomaly_type']} "
+            f"- {row['transaction_id']}"
         ):
 
             st.write(
@@ -197,5 +272,36 @@ try:
 except Exception:
 
     st.warning(
-        "AI reports not generated yet."
+        "AI reports unavailable."
+    )
+
+# =====================================================
+# AUDIT LOGS
+# =====================================================
+
+st.subheader(
+    "Audit Logs"
+)
+
+try:
+
+    logs_df = pd.read_sql(
+        """
+        SELECT *
+        FROM audit_logs
+        ORDER BY action_timestamp DESC
+        LIMIT 20;
+        """,
+        engine
+    )
+
+    st.dataframe(
+        logs_df,
+        use_container_width=True
+    )
+
+except Exception:
+
+    st.warning(
+        "Audit logs unavailable."
     )
