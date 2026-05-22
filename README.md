@@ -311,4 +311,4 @@ This project demonstrates:
 
 # Disclaimer
 
-This project uses synthetic financial data for educational and portfolio purposes only.
+This project uses synthetic financial data.
